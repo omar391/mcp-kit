@@ -1,4 +1,4 @@
-# @omar391/mcp-kit
+# mcp-kit
 
 **Universal MCP (Model Context Protocol) toolkit** for building MCP servers that work across all JavaScript runtimes.
 
@@ -11,19 +11,25 @@
 - 📦 **Multi-Target Builds**: Separate optimized builds for different runtime environments
 - 🛠️ **Framework Agnostic**: No external dependencies in universal builds
 
+### Local Runtime Features (Node.js/Bun)
+
+- 🔀 **Multi-Instance Coordination**: Lock-based main/proxy pattern with automatic role assignment
+- 🔄 **Version-Based Upgrades**: Seamless transitions when deploying new versions
+- 🌐 **Reverse Proxy Gateway**: Lightweight HTTP proxy for load distribution
+- 🔌 **STDIO Proxy**: Forward MCP requests over STDIO transport (Claude Desktop compatible)
+- 🚪 **Port Management**: Automatic port allocation, conflict resolution, and cleanup
+- ♻️ **Process Lifecycle**: Graceful shutdown handlers and signal management
+- 🔒 **Stale Lock Recovery**: Automatic cleanup of crashed instance locks
+
 ## Installation
 
 ```bash
-npm install @omar391/mcp-kit
+npm install github:omar391/mcp-kit
 # or
-pnpm add @omar391/mcp-kit
+pnpm add github:omar391/mcp-kit
 ```
 
 ## Quick Start
-
-### Universal MCP Server
-
-Create an MCP server that works everywhere:
 
 ```typescript
 import { createHonoMcpServer } from '@omar391/mcp-kit/server/core/hono-mcp';
@@ -57,48 +63,40 @@ const app = createHonoMcpServer({
 // - Vercel Edge: export default app
 ```
 
-### Runtime-Specific Features
-
-Access Node.js-specific features when available:
-
-```typescript
-import { detectRuntime, isNodeLike } from '@omar391/mcp-kit/server/core/runtime';
-
-if (isNodeLike()) {
-  // Node.js/Bun specific features available
-  const { startMcpServer } = await import('@omar391/mcp-kit/server');
-
-  const result = await startMcpServer({
-    serverName: 'my-server',
-    serverVersion: '1.0.0',
-    toolHandlers,
-    defaultPort: 3000
-  });
-} else {
-  // Universal deployment
-  export default { fetch: app.fetch };
-}
-```
-
 ## Architecture
 
-The new universal architecture is built around Hono and provides:
-
-### Universal Core (`server/core/`)
-- **`hono-mcp.ts`**: Universal MCP server implementation using Hono
-- **`handlers.ts`**: Type-safe tool handler creation and validation
-- **`middleware.ts`**: MCP protocol middleware and error handling
-- **`runtime.ts`**: Runtime detection and environment-specific utilities
-- **`types.ts`**: Shared TypeScript types and interfaces
-
-### Local Features (`server/local/`)
-- **`node-instance/`**: Multi-instance coordination and process management
-- **`port-manager.ts`**: Port allocation and conflict resolution
-- **`process-manager.ts`**: Process lifecycle and signal handling
-
-### Client & Utilities
-- **`client.ts`**: MCP client for connecting to MCP servers
-- **`utils/cli-parser.ts`**: Command-line argument parsing utilities
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Your MCP Server                      │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ├─ Runtime Detection
+                           │
+        ┌──────────────────┴──────────────────┐
+        │                                     │
+        ▼                                     ▼
+┌──────────────────┐              ┌────────────────────┐
+│  Universal Core  │              │  Local Features    │
+│  (All Runtimes)  │              │  (Node.js/Bun)     │
+│                  │              │                    │
+│  • Hono Server   │              │  • Instance Mgmt   │
+│  • Tool Handlers │              │  • Proxy Gateway   │
+│  • Middleware    │              │  • Port Manager    │
+│  • Type System   │              │  • Process Mgmt    │
+└──────────────────┘              └────────────────────┘
+        │                                     │
+        └─────────────┬───────────────────────┘
+                      ▼
+        ┌──────────────────────────┐
+        │    Deployment Target     │
+        ├──────────────────────────┤
+        │ • Node.js / Bun          │
+        │ • Cloudflare Workers     │
+        │ • Vercel Edge            │
+        │ • Netlify Edge           │
+        │ • Deno                   │
+        └──────────────────────────┘
+```
 
 ## Runtime Compatibility
 
@@ -112,165 +110,175 @@ The new universal architecture is built around Hono and provides:
 | Deno | ✅ | ❌ | Universal only |
 | Browser | ✅ | ❌ | Universal only |
 
+## Multi-Instance Coordination
+
+**Available in Node.js/Bun environments only**
+
+### Architecture Overview
+
+```
+                    ┌─────────────────────────┐
+                    │   Lock File System      │
+                    │ /tmp/mcp-kit-{port}.lock│
+                    └───────────┬─────────────┘
+                                │
+                    First process acquires lock
+                                │
+        ┌───────────────────────┴───────────────────────┐
+        │                                               │
+        ▼                                               ▼
+┌───────────────┐                            ┌──────────────────┐
+│     MAIN      │                            │  PROXY INSTANCES │
+│   INSTANCE    │                            │  (HTTP or STDIO) │
+│               │                            │                  │
+│ • Holds Lock  │◄───── Forward Requests ────┤  • No Lock       │
+│ • Port: 8989  │                            │  • Auto Port     │
+│ • Runs Tools  │                            │  • Transparent   │
+└───────┬───────┘                            └────────▲─────────┘
+        │                                              │
+        │                                              │
+        ├─ Control Endpoints:                          │
+        │  • /__version                                │
+        │  • /__shutdown                               │
+        │  • /__transition                             │
+        │                                              │
+        └──────────────┬───────────────────────────────┘
+                       │
+                       ▼
+              ┌────────────────┐
+              │  MCP Clients   │
+              │ (Claude, etc.) │
+              └────────────────┘
+```
+
+### How It Works
+
+**1. Lock-Based Election**
+   - First instance creates lock file → becomes MAIN
+   - Subsequent instances detect lock → become PROXY
+
+**2. Version Management**
+   - New version detects old MAIN
+   - Requests graceful transition via `/__transition`
+   - Old MAIN becomes proxy, new becomes MAIN
+   - Seamless upgrades without downtime
+
+**3. Stale Lock Recovery**
+   - Detects crashed processes (PID check)
+   - Auto-cleans stale locks
+   - Promotes proxy to MAIN if needed
+
+**4. Proxy Modes**
+   - **HTTP Mode**: Reverse proxy forwards all requests
+   - **STDIO Mode**: MCP client proxy for Claude Desktop integration
+
+### Version Upgrade Flow
+
+```
+   Time ──────────────────────────────────────────────►
+
+   ┌─────────────────┐
+   │  MAIN v1.0.0    │  Running, handling requests
+   │  Port: 8989     │
+   └────────┬────────┘
+            │
+            │  New deployment starts
+            │
+            ▼
+   ┌─────────────────┐     ┌─────────────────┐
+   │  MAIN v1.0.0    │     │  NEW v2.0.0     │
+   │  Port: 8989     │     │  Detects lock   │
+   └────────┬────────┘     └────────┬────────┘
+            │                       │
+            │◄──── POST /__transition ───┤
+            │                       │
+            ▼                       │
+   ┌─────────────────┐              │
+   │  Becomes PROXY  │              │
+   │  Removes lock   │              │
+   └─────────────────┘              │
+                                    ▼
+                          ┌─────────────────┐
+                          │  MAIN v2.0.0    │
+                          │  Port: 8989     │
+                          │  Handles reqs   │
+                          └─────────────────┘
+```
+
 ## API Reference
 
-### Universal Core
+### Core Functions
 
-#### `createHonoMcpServer(options)`
+| Function | Runtime | Description |
+|----------|---------|-------------|
+| `createHonoMcpServer(options)` | Universal | Create MCP server on Hono framework |
+| `createToolHandlers(tools)` | Universal | Type-safe tool handler definitions |
+| `startMcpServer(config)` | Node.js/Bun | High-level starter with coordination |
+| `detectRuntime()` | Universal | Get runtime information |
+| `isNodeLike()` | Universal | Check if Node.js or Bun |
 
-Creates a universal MCP server using Hono.
+### Local Features (Node.js/Bun)
 
+| Component | Purpose |
+|-----------|---------|
+| `InstanceManager` | Multi-instance coordination with locks |
+| `ProxyManager` | HTTP reverse proxy gateway |
+| `coordinateInstanceRole()` | Automatic main/proxy election |
+| `startStdioProxy()` | STDIO transport proxy |
+| `ensurePortAvailable()` | Port conflict resolution |
+| `registerSignalHandlers()` | Graceful shutdown handling |
+
+See inline documentation and TypeScript types for detailed API usage.
+
+
+## Usage Examples
+
+### Basic Server
 ```typescript
-interface HonoMcpOptions {
-  serverInfo: { name: string; version: string };
-  toolHandlers: MCPToolHandlers;
-}
+import { startMcpServer, createToolHandlers } from '@omar391/mcp-kit/server';
 
-const app = createHonoMcpServer(options);
-```
-
-#### `createToolHandlers(tools)`
-
-Creates type-safe MCP tool handlers.
-
-```typescript
-const handlers = createToolHandlers([
-  {
-    name: 'my-tool',
-    description: 'Tool description',
-    inputSchema: { /* JSON Schema */ },
-    handler: async (args) => ({ content: [{ type: 'text', text: 'result' }] })
-  }
-]);
-```
-
-### Runtime Detection
-
-#### `detectRuntime()`
-
-Returns detailed runtime information.
-
-```typescript
-const runtime = detectRuntime();
-// { name: 'node', version: '18.17.0', isNodeLike: true, ... }
-```
-
-#### `isNodeLike()`
-
-Returns true for Node.js and Bun environments.
-
-### Local Features (Node.js/Bun only)
-
-#### `startMcpServer(options)`
-
-Starts an MCP server with multi-instance coordination and local features.
-
-## Breaking Changes
-
-### v0.1.0 → v1.0.0
-
-**🚨 MAJOR BREAKING CHANGE**: Complete architecture rewrite with zero backward compatibility.
-
-The previous Express/Edge specific APIs have been replaced with a universal Hono-based core. There is **no migration path** - existing code must be rewritten.
-
-#### What Changed
-
-- **Removed**: All Express and Edge specific modules
-- **Removed**: Multi-instance coordination from core
-- **Added**: Universal Hono-based MCP server
-- **Added**: Runtime detection and conditional features
-- **Added**: Cross-runtime compatibility
-
-#### Migration Required
-
-**There is no automated migration.** You must rewrite your MCP server implementation:
-
-```typescript
-// OLD (v0.1.0) - NO LONGER WORKS
-import { startMcpServer } from '@omar391/mcp-kit/server';
-const result = await startMcpServer({
-  kind: 'express',
-  toolHandlers,
-  // ... other options
+await startMcpServer({
+  serverName: 'my-server',
+  serverVersion: '1.0.0',
+  toolHandlers: createToolHandlers([/* tools */]),
+  defaultPort: 8989
 });
-
-// NEW (v1.0.0) - REQUIRED
-import { createHonoMcpServer } from '@omar391/mcp-kit/server/core/hono-mcp';
-import { createToolHandlers } from '@omar391/mcp-kit/server/handlers';
-
-const toolHandlers = createToolHandlers([/* your tools */]);
-const app = createHonoMcpServer({
-  serverInfo: { name: 'my-server', version: '1.0.0' },
-  toolHandlers
-});
-
-// For Node.js deployment
-if (typeof process !== 'undefined') {
-  const { startMcpServer } = await import('@omar391/mcp-kit/server');
-  await startMcpServer({
-    serverName: 'my-server',
-    serverVersion: '1.0.0',
-    toolHandlers,
-    defaultPort: 3000
-  });
-} else {
-  // Universal deployment
-  export default { fetch: app.fetch };
-}
 ```
 
-#### Key Differences
-
-1. **Tool Handlers**: Now created with `createToolHandlers()` instead of plain objects
-2. **Server Creation**: `createHonoMcpServer()` instead of `startMcpServer()`
-3. **Runtime Detection**: Check runtime before using Node.js-specific features
-4. **Deployment**: Single universal build works everywhere
-
-### Recommended Upgrade Path
-
-1. **Audit**: Identify all usage of old APIs
-2. **Rewrite**: Implement new universal server pattern
-3. **Test**: Verify functionality across target runtimes
-4. **Deploy**: Use appropriate build target for your environment
-
-## Deployment Examples
-
-### Node.js / Bun
-
+### With Lifecycle Hooks
 ```typescript
-import { startMcpServer } from '@omar391/mcp-kit/server';
-
-const result = await startMcpServer({
+await startMcpServer({
   serverName: 'my-server',
   serverVersion: '1.0.0',
   toolHandlers,
-  defaultPort: 3000
+  localMode: {
+    onLocalStart: async (instanceManager) => {
+      console.log(`Main instance on port ${instanceManager.port}`);
+    },
+    onShutdown: async (instanceManager) => {
+      await instanceManager.removeLock();
+    }
+  }
 });
-
-console.log(`Server running`);
 ```
 
-### Cloudflare Workers
-
+### Edge Runtime (Universal)
 ```typescript
 import { createHonoMcpServer } from '@omar391/mcp-kit/server/core/hono-mcp';
 
-const app = createHonoMcpServer({ /* options */ });
+const app = createHonoMcpServer({ serverInfo, toolHandlers });
 
-export default {
-  fetch: app.fetch
-};
-```
+// Cloudflare Workers
+export default { fetch: app.fetch };
 
-### Vercel Edge Functions
-
-```typescript
-import { createHonoMcpServer } from '@omar391/mcp-kit/server/core/hono-mcp';
-
-const app = createHonoMcpServer({ /* options */ });
-
+// Vercel Edge
 export const config = { runtime: 'edge' };
 export default app;
+```
+
+### STDIO Mode (Claude Desktop)
+```bash
+node server.js --mode=stdio
 ```
 
 ## Build Targets
@@ -293,6 +301,16 @@ Use conditional exports to automatically get the right build:
   }
 }
 ```
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Port already in use | Run with `--kill-existing` flag or `lsof -i :PORT` to check |
+| Stale lock file | Auto-cleaned if process dead, or manual: `rm /tmp/mcp-kit-{port}.lock` |
+| Version conflict | New version auto-requests transition via `/__transition` endpoint |
+| Proxy not connecting | Verify main instance running and no firewall blocking localhost |
+| Lock permissions | Ensure `/tmp` is writable and process has file permissions |
 
 ## License
 
